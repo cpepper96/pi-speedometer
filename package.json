@@ -27,7 +27,7 @@
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "files": [
     "extensions",
@@ -35,7 +35,7 @@
     "LICENSE"
   ],
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.73.1",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
     "@types/node": "^25.9.1",
     "typescript": "^6.0.3"
   }
