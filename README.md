@@ -1,6 +1,6 @@
 # pi-speedometer
 
-A per-turn speedometer for [pi](https://pi.dev): TTFT(Time-to-first-token), prefill tok/s, decode tok/s, and total wall time.
+A per-turn speedometer for [pi](https://pi.dev): TTFT (time to first token), prefill tok/s, decode tok/s, and total wall time.
 
 Pi's built-in footer already shows tokens, cache, cost, context, and model. This extension surfaces the *timing* numbers it doesn't show.
 
