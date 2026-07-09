@@ -39,6 +39,24 @@ pi -e npm:pi-speedometer
 
 Numbers come from `AssistantMessage.usage` (provider-agnostic) plus pi's own event timings, so any provider pi supports will report.
 
+## Development
+
+`./dev` drops you into a [nono](https://nono.sh)-sandboxed shell with the toolchain (node 24, matching CI) provided by the nix flake:
+
+```bash
+./dev                    # interactive sandboxed shell — run pi, npm, etc. inside
+./dev npm ci             # or run a one-off command sandboxed
+./dev npm run typecheck
+```
+
+The only host prerequisite is [nix](https://nixos.org/download). One-time setup — install the base sandbox profile pack (using the flake's own nono):
+
+```bash
+nix --extra-experimental-features 'nix-command flakes' develop -c nono pull always-further/pi
+```
+
+The sandbox profile lives in `.nono/pi-speedometer.json` and extends `always-further/pi`; project-specific grants go there.
+
 ## License
 
 MIT

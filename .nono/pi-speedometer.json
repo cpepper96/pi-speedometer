@@ -1,0 +1,8 @@
+{
+  "extends": "always-further/pi",
+  "meta": {
+    "name": "pi-speedometer",
+    "version": "1.0.0",
+    "description": "pi-speedometer dev: always-further/pi base (nix_runtime, node_runtime, caches, credential proxy). No project-specific grants yet."
+  }
+}
