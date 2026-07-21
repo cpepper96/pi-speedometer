@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Sandboxed dev environment. nix provides the toolchain (node 24, nono);
+# nono wraps the inner shell with the repo profile (.nono/pi-speedometer.json).
+#
+# Usage:
+#   ./dev                     interactive sandboxed shell (run pi, npm, etc. inside)
+#   ./dev <cmd> [args...]     run a one-off command sandboxed, e.g. ./dev npm run typecheck
+set -euo pipefail
+cd "$(dirname "$0")"
+
+if [ "$#" -eq 0 ]; then
+  set -- "${SHELL:-/bin/zsh}"
+fi
+
+exec nix --extra-experimental-features 'nix-command flakes' develop \
+  --command nono run --profile ./.nono/pi-speedometer.json -- "$@"
