@@ -1,0 +1,57 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "security:minimumReleaseAgeNpm"
+  ],
+  "timezone": "America/Los_Angeles",
+  "schedule": [
+    "after 6pm on sunday"
+  ],
+  "nix": {
+    "enabled": true,
+    "lockFileMaintenance": {
+      "enabled": true,
+      "schedule": [
+        "after 6pm on sunday"
+      ]
+    }
+  },
+  "packageRules": [
+    {
+      "description": "pi's SDK is pre-1.0 and on a fast release train. It is the only dependency that can break the typecheck, so it gets a PR to itself.",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "@earendil-works/pi-coding-agent"
+      ],
+      "groupName": "pi-coding-agent"
+    },
+    {
+      "description": "TypeScript and its node types are one toolchain and interact. Review them together.",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "typescript",
+        "@types/node"
+      ],
+      "groupName": "typescript toolchain"
+    },
+    {
+      "description": "Both actions serve the publish workflow. One PR, one decision.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github actions"
+    },
+    {
+      "description": "The peer range is this extension's compatibility claim. Raise it only when the code adopts an API that needs it, never because a new pi shipped. Keep this rule last so it overrides the rules above.",
+      "matchDepTypes": [
+        "peerDependencies"
+      ],
+      "enabled": false
+    }
+  ]
+}
