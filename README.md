@@ -6,7 +6,20 @@ Pi's built-in footer already shows tokens, cache, cost, context, and model. This
 
 ## Status line
 
-After each turn, pi's status area shows:
+While a turn streams, pi's status area shows a live gauge for the current turn:
+
+```txt
+⠹ ▁▂······ ~65 tok/s · ttft 812ms · 4.2s
+```
+
+The gauge is a tachometer for decode speed: fill level is the current turn's
+decode tok/s on a linear 0–400 scale (50 tok/s per cell). A ~65 tok/s model
+lights a cell or two; a 400+ tok/s provider revs it to full. The number is an
+estimate from streamed characters — it snaps to the real value at turn end.
+During tool calls the gauge sags and revs back when streaming resumes. Before
+the first token you get `⠹ ········ waiting… · 1.3s`.
+
+After each turn, the line settles into the measured stats:
 
 ```txt
 ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
@@ -17,6 +30,7 @@ ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
 - `/speed` — show recent turns and per-model session averages
 - `/speed clear` — reset history
 - `/speed csv` — dump full history to `~/.pi/pi-speedometer-<timestamp>.csv`
+- `/speed live on|off` — toggle the live gauge for the current session (on by default)
 
 ## Install
 
@@ -36,6 +50,7 @@ pi -e npm:pi-speedometer
 - **Prefill tok/s** — `(input + cacheWrite) / ttft`. `cacheRead` is excluded because those tokens didn't require real prefill work this turn. `cacheWrite` is included because those tokens were processed *and* persisted to cache.
 - **Decode tok/s** — `output / (turn_end - first_token)`.
 - **Total** — wall-clock from `turn_start` to `turn_end`, including any tool round-trips inside the turn.
+- **Live estimate** — streamed characters (text, thinking, and tool-call arguments) ÷ 4, divided by the time since the first token. The window spans tool round-trips, to match the settled decode number. The true `usage` counts replace the estimate at `turn_end`.
 
 Numbers come from `AssistantMessage.usage` (provider-agnostic) plus pi's own event timings, so any provider pi supports will report.
 
