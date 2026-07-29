@@ -44,13 +44,13 @@ Or try it without installing:
 pi -e npm:pi-speedometer
 ```
 
-## How it's measured
+## How it is measured
 
-- **TTFT** — `performance.now()` from `turn_start` to the first `text_delta` or `toolcall_delta` (thinking deltas are skipped so TTFT reflects perceived latency on reasoning models).
-- **Prefill tok/s** — `(input + cacheWrite) / ttft`. `cacheRead` is excluded because those tokens didn't require real prefill work this turn. `cacheWrite` is included because those tokens were processed *and* persisted to cache.
-- **Decode tok/s** — `output / (turn_end - first_token)`.
-- **Total** — wall-clock from `turn_start` to `turn_end`, including any tool round-trips inside the turn.
-- **Live estimate** — streamed characters (text, thinking, and tool-call arguments) ÷ 4, divided by the time since the first token. The window spans tool round-trips, to match the settled decode number. The true `usage` counts replace the estimate at `turn_end`.
+- **TTFT** — the time from `turn_start` to the first `text_delta` or `toolcall_delta`, measured with `performance.now()`. Thinking deltas do not stop this timer. Thus, on reasoning models, TTFT shows the latency that the user feels.
+- **Prefill tok/s** — `(input + cacheWrite) / ttft`. `cacheRead` is not included, because those tokens did no prefill work in this turn. `cacheWrite` is included, because those tokens were processed and written to the cache.
+- **Decode tok/s** — `answer_output / (turn_end - first_token)`. `answer_output` is the answer-phase part of `usage.output`, calculated from the ratio of streamed characters. Reasoning tokens are not included, because the decode window starts at the first visible token. Without this correction, thinking tokens would make the answer-phase rate too high on reasoning models. If no stream deltas occurred, the raw `output` value is used.
+- **Total** — the wall-clock time from `turn_start` to `turn_end`. Tool round-trips in the turn are included.
+- **Live estimate** — streamed characters divided by 4, divided by the time of the current phase. The gauge operates during thinking, because thinking tokens are real decode work and their speed is visible. When visible text starts, the gauge changes to the answer-phase rate. The answer-phase window includes tool round-trips, to agree with the settled decode number. At `turn_end`, the true `usage` counts replace the estimate.
 
 Numbers come from `AssistantMessage.usage` (provider-agnostic) plus pi's own event timings, so any provider pi supports will report.
 

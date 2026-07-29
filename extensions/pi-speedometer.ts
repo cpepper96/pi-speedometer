@@ -7,12 +7,17 @@
  * Pi's own footer already shows ↑/↓/cache/cost/context/model, so this
  * extension intentionally only surfaces the *timing* numbers pi doesn't show.
  *
- * Status line (most recent turn):
- *   ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
+ * Status line (most recent turn) — the gauge freezes at the final decode
+ * tok/s (from real usage) and stays until the next turn starts:
+ *   ▁▂······ ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
  *
  * While a turn streams, the same status slot shows a live gauge for the
- * current turn only — fill level is decode tok/s on a linear 0–400 scale,
- * estimated from streamed characters and snapped to real usage at turn end:
+ * current turn only. The fill level is tok/s on a linear 0–400 scale. The
+ * value is estimated from streamed characters and is set to the real usage
+ * at turn end. The gauge operates during thinking also: thinking tokens
+ * are real decode work, and their speed is visible. When visible text
+ * starts, the gauge changes to the answer-phase rate:
+ *   ⠹ ▁▂······ ~78 tok/s · thinking · 12.3s
  *   ⠹ ▁▂······ ~65 tok/s · ttft 812ms · 4.2s
  *
  * Commands:
@@ -89,6 +94,11 @@ const prefillTps = (s: TurnStat) => {
 	return num / (s.ttftMs / 1000);
 };
 
+// The decode numerator has answer-phase tokens only. TTFT skips thinking
+// deltas on purpose (perceived latency), so the decode window starts after
+// thinking. usage.output includes reasoning tokens. computeStat thus
+// divides usage.output by the ratio of streamed characters. Without this
+// step, thinking tokens would make decode tok/s too high.
 const decodeTps = (s: TurnStat) =>
 	s.decodeMs > 0 && s.output > 0 ? s.output / (s.decodeMs / 1000) : NaN;
 
@@ -117,19 +127,29 @@ function computeStat({
 	turnStart,
 	firstTokenAt,
 	turnEnd,
+	thinkingChars,
+	visibleChars,
 }: {
 	model: string;
 	usage: { input?: number; cacheRead?: number; cacheWrite?: number; output?: number };
 	turnStart: number;
 	firstTokenAt: number;
 	turnEnd: number;
+	thinkingChars: number;
+	visibleChars: number;
 }): TurnStat {
+	const output = usage.output ?? 0;
+	// Divide output tokens between the thinking and answer phases by the
+	// ratio of streamed characters. If no deltas occurred (for example
+	// non-streaming providers), use the raw count.
+	const streamed = thinkingChars + visibleChars;
+	const answerOutput = streamed > 0 ? Math.round(output * (visibleChars / streamed)) : output;
 	return {
 		model,
 		input: usage.input ?? 0,
 		cacheRead: usage.cacheRead ?? 0,
 		cacheWrite: usage.cacheWrite ?? 0,
-		output: usage.output ?? 0,
+		output: answerOutput,
 		ttftMs: firstTokenAt - turnStart,
 		decodeMs: turnEnd - firstTokenAt,
 		totalMs: turnEnd - turnStart,
@@ -180,13 +200,17 @@ export default function (pi: ExtensionAPI) {
 	// Live gauge state (current turn only).
 	let liveEnabled = true;
 	let liveTimer: ReturnType<typeof setInterval> | undefined;
-	let streamedChars = 0;
+	let firstThinkingAt = 0;
+	let thinkingChars = 0;
+	let visibleChars = 0; // text + tool-call args, i.e. the answer phase
 	let liveTick = 0;
 
 	const reset = () => {
 		turnStart = 0;
 		firstTokenAt = 0;
-		streamedChars = 0;
+		firstThinkingAt = 0;
+		thinkingChars = 0;
+		visibleChars = 0;
 	};
 
 	const pushStat = (s: TurnStat) => {
@@ -197,15 +221,25 @@ export default function (pi: ExtensionAPI) {
 	const liveLine = (theme: ThemeLike): string => {
 		const now = performance.now();
 		const spin = theme.fg("accent", SPINNER[liveTick % SPINNER.length]);
-		if (!firstTokenAt) {
+		if (!firstTokenAt && !firstThinkingAt) {
 			const empty = theme.fg("dim", GAUGE_OFF.repeat(GAUGE_CELLS));
 			return `${spin} ${empty} ${theme.fg("dim", `waiting… · ${secs(now - turnStart)}`)}`;
 		}
-		// Cumulative decode speed for this turn so far. The window spans tool
-		// round-trips (matching the settled decode number), so the gauge sags
-		// during tool calls and revs back when streaming resumes.
+		if (!firstTokenAt) {
+			// Thinking phase: thinking tokens are real decode work and their
+			// speed is visible, so the gauge stays on. The window starts at the
+			// first thinking delta, to keep prefill latency out of it.
+			const thinkSec = (now - firstThinkingAt) / 1000;
+			const tps = thinkSec > 0 ? thinkingChars / CHARS_PER_TOKEN / thinkSec : NaN;
+			const text = `~${r(tps)} tok/s · thinking · ${secs(now - turnStart)}`;
+			return `${spin} ${gauge(tps, theme)} ${theme.fg("dim", text)}`;
+		}
+		// Answer phase: cumulative visible-token speed for this turn so far.
+		// The window includes tool round-trips, to agree with the settled
+		// decode number. The gauge value decreases during tool calls and
+		// increases again when streaming continues.
 		const decodeSec = (now - firstTokenAt) / 1000;
-		const tps = decodeSec > 0 ? streamedChars / CHARS_PER_TOKEN / decodeSec : NaN;
+		const tps = decodeSec > 0 ? visibleChars / CHARS_PER_TOKEN / decodeSec : NaN;
 		const text =
 			`~${r(tps)} tok/s · ` +
 			`ttft ${(firstTokenAt - turnStart).toFixed(0)}ms · ` +
@@ -247,22 +281,28 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_start", async (_e, ctx) => {
 		turnStart = performance.now();
 		firstTokenAt = 0;
-		streamedChars = 0;
+		firstThinkingAt = 0;
+		thinkingChars = 0;
+		visibleChars = 0;
 		startLive(ctx.ui);
 	});
 
 	pi.on("message_update", async (event) => {
 		const ev = event.assistantMessageEvent;
-		// Count every streamed character (text, thinking, tool-call args) for
-		// the live output-token estimate.
-		if (ev.type === "text_delta" || ev.type === "thinking_delta" || ev.type === "toolcall_delta") {
-			streamedChars += ev.delta.length;
+		// Count thinking and visible characters separately. usage.output puts
+		// reasoning tokens in the total. The character ratio is thus
+		// necessary to divide the settled decode number correctly, and to let
+		// the live gauge show the speed of the correct phase.
+		if (ev.type === "thinking_delta") {
+			thinkingChars += ev.delta.length;
+			if (!firstThinkingAt) firstThinkingAt = performance.now();
+			return;
 		}
-		if (firstTokenAt) return;
-		// Latch on the first *user-visible* delta. Skip thinking deltas so TTFT
-		// reflects perceived latency on reasoning models.
 		if (ev.type === "text_delta" || ev.type === "toolcall_delta") {
-			firstTokenAt = performance.now();
+			visibleChars += ev.delta.length;
+			// Latch on the first *user-visible* delta. Skip thinking deltas so
+			// TTFT reflects perceived latency on reasoning models.
+			if (!firstTokenAt) firstTokenAt = performance.now();
 		}
 	});
 
@@ -282,10 +322,17 @@ export default function (pi: ExtensionAPI) {
 			turnStart,
 			firstTokenAt,
 			turnEnd,
+			thinkingChars,
+			visibleChars,
 		});
 
 		pushStat(stat);
-		ctx.ui.setStatus("speedometer", ctx.ui.theme.fg("dim", fmt(stat)));
+		// Keep the gauge (snapped to real decode tok/s) alongside the settled
+		// numbers until the next turn_start replaces it.
+		ctx.ui.setStatus(
+			"speedometer",
+			`${gauge(decodeTps(stat), ctx.ui.theme)} ${ctx.ui.theme.fg("dim", fmt(stat))}`,
+		);
 		reset();
 	});
 
