@@ -6,31 +6,26 @@ Pi's built-in footer already shows tokens, cache, cost, context, and model. This
 
 ## Status line
 
-While a turn streams, pi's status area shows a live gauge for the current turn:
+After each valid turn, pi's status line shows the measured stats and a gauge:
 
 ```txt
-⠹ ▁▂······ ~65 tok/s · ttft 812ms · 4.2s
+▁▂······ ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
 ```
 
-The gauge is a tachometer for decode speed: fill level is the current turn's
-decode tok/s on a linear 0–400 scale (50 tok/s per cell). A ~65 tok/s model
-lights a cell or two; a 400+ tok/s provider revs it to full. The number is an
-estimate from streamed characters — it snaps to the real value at turn end.
-During tool calls the gauge sags and revs back when streaming resumes. Before
-the first token you get `⠹ ········ waiting… · 1.3s`.
+The gauge is a tachometer for decode speed. Its fill level uses the same decode
+tok/s value shown in the line. The scale is linear from 0 to 400 tok/s, with
+50 tok/s per cell. A 65 tok/s model lights one or two cells. A provider at 400
+tok/s or more fills the gauge.
 
-After each turn, the line settles into the measured stats:
-
-```txt
-ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
-```
+The complete line uses the theme warning color for 500 ms when new data
+arrives. It then returns to its normal colors. The line stays unchanged while
+the next turn runs. An aborted or invalid turn does not replace it.
 
 ## Commands
 
 - `/speed` — show recent turns and per-model session averages
 - `/speed clear` — reset history
 - `/speed csv` — dump full history to `~/.pi/pi-speedometer-<timestamp>.csv`
-- `/speed live on|off` — toggle the live gauge for the current session (on by default)
 
 ## Install
 
@@ -48,11 +43,11 @@ pi -e npm:pi-speedometer
 
 - **TTFT** — the time from `turn_start` to the first `text_delta` or `toolcall_delta`, measured with `performance.now()`. Thinking deltas do not stop this timer. Thus, on reasoning models, TTFT shows the latency that the user feels.
 - **Prefill tok/s** — `(input + cacheWrite) / ttft`. `cacheRead` is not included, because those tokens did no prefill work in this turn. `cacheWrite` is included, because those tokens were processed and written to the cache.
-- **Decode tok/s** — `answer_output / (turn_end - first_token)`. `answer_output` is the answer-phase part of `usage.output`, calculated from the ratio of streamed characters. Reasoning tokens are not included, because the decode window starts at the first visible token. Without this correction, thinking tokens would make the answer-phase rate too high on reasoning models. If no stream deltas occurred, the raw `output` value is used.
+- **Decode tok/s** — `answer_output / (turn_end - first_token)`. `answer_output` is `usage.output - (usage.reasoning ?? 0)`. Reasoning tokens are not included because the decode window starts at the first visible token. If the provider does not report reasoning usage, the raw `output` value is used.
 - **Total** — the wall-clock time from `turn_start` to `turn_end`. Tool round-trips in the turn are included.
-- **Live estimate** — streamed characters divided by 4, divided by the time of the current phase. The gauge operates during thinking, because thinking tokens are real decode work and their speed is visible. When visible text starts, the gauge changes to the answer-phase rate. The answer-phase window includes tool round-trips, to agree with the settled decode number. At `turn_end`, the true `usage` counts replace the estimate.
+- **Gauge** — the completed turn's decode tok/s on a linear 0–400 scale. The gauge does not estimate speed while a turn runs.
 
-Numbers come from `AssistantMessage.usage` (provider-agnostic) plus pi's own event timings, so any provider pi supports will report.
+Numbers come from `AssistantMessage.usage` plus pi's event timings.
 
 ## Development
 

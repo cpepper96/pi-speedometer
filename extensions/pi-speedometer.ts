@@ -1,30 +1,23 @@
 /**
  * pi-speedometer — display per-turn speed/timing metrics (TTFT, prefill tok/s, decode tok/s)
  *
- * Provider-agnostic; relies on standard pi events (turn_start, message_update,
- * turn_end) and the AssistantMessage.usage counts pi-ai already collects.
+ * Relies on standard pi events (turn_start, message_update, turn_end) and the
+ * AssistantMessage.usage counts pi-ai already collects.
  *
  * Pi's own footer already shows ↑/↓/cache/cost/context/model, so this
  * extension intentionally only surfaces the *timing* numbers pi doesn't show.
  *
- * Status line (most recent turn) — the gauge freezes at the final decode
- * tok/s (from real usage) and stays until the next turn starts:
+ * Status line (most recent turn) — the gauge uses the final decode tok/s
+ * from real usage and stays unchanged until the next valid turn ends:
  *   ▁▂······ ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
  *
- * While a turn streams, the same status slot shows a live gauge for the
- * current turn only. The fill level is tok/s on a linear 0–400 scale. The
- * value is estimated from streamed characters and is set to the real usage
- * at turn end. The gauge operates during thinking also: thinking tokens
- * are real decode work, and their speed is visible. When visible text
- * starts, the gauge changes to the answer-phase rate:
- *   ⠹ ▁▂······ ~78 tok/s · thinking · 12.3s
- *   ⠹ ▁▂······ ~65 tok/s · ttft 812ms · 4.2s
+ * When new data arrives, the complete line uses the theme warning color for
+ * 500 ms. It then returns to its normal gauge and text colors.
  *
  * Commands:
  *   /speed         show recent turns and per-model session averages
  *   /speed clear   reset history
  *   /speed csv     dump full history to ~/.pi/pi-speedometer-<timestamp>.csv
- *   /speed live on|off   toggle the live gauge for this session
  *
  * Install:
  *   pi install npm:pi-speedometer
@@ -63,19 +56,15 @@ interface Aggregate {
 const DEFAULT_RECENT = 10;
 const HISTORY_CAP = 1000;
 
-// Live gauge (shown while a turn streams).
-const LIVE_TICK_MS = 250;
+const FLASH_MS = 500;
 const GAUGE_CELLS = 8;
 const GAUGE_MAX_TPS = 400; // linear full scale; 50 tok/s per cell
 const RAMP = "▁▂▃▄▅▆▇█";
 const GAUGE_OFF = "·";
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const CHARS_PER_TOKEN = 4; // rough estimate; replaced by real usage at turn_end
 
-// Minimal structural slices of pi's UI types, so helpers stay decoupled from
+// Minimal structural slice of pi's theme type, so helpers stay decoupled from
 // which context (event vs command) they receive.
-type ThemeLike = { fg(color: "accent" | "dim", text: string): string };
-type UiLike = { setStatus(key: string, text: string | undefined): void; theme: ThemeLike };
+type ThemeLike = { fg(color: "accent" | "dim" | "warning", text: string): string };
 
 // Render a number with `d` decimals, or "—" when not finite.
 const r = (n: number, d = 0) => (Number.isFinite(n) ? n.toFixed(d) : "—");
@@ -95,10 +84,7 @@ const prefillTps = (s: TurnStat) => {
 };
 
 // The decode numerator has answer-phase tokens only. TTFT skips thinking
-// deltas on purpose (perceived latency), so the decode window starts after
-// thinking. usage.output includes reasoning tokens. computeStat thus
-// divides usage.output by the ratio of streamed characters. Without this
-// step, thinking tokens would make decode tok/s too high.
+// deltas on purpose, so the decode window starts after thinking.
 const decodeTps = (s: TurnStat) =>
 	s.decodeMs > 0 && s.output > 0 ? s.output / (s.decodeMs / 1000) : NaN;
 
@@ -110,16 +96,29 @@ const fmt = (s: TurnStat) =>
 
 // Ramp gauge: fill level = tps on a linear 0..GAUGE_MAX_TPS scale.
 // Any nonzero speed lights at least one cell; unlit cells stay visible as dim dots.
+const gaugeCells = (tps: number) =>
+	!Number.isFinite(tps) || tps <= 0
+		? 0
+		: Math.min(GAUGE_CELLS, Math.max(1, Math.round((tps / GAUGE_MAX_TPS) * GAUGE_CELLS)));
+
+const gaugeText = (tps: number): string => {
+	const cells = gaugeCells(tps);
+	return RAMP.slice(0, cells) + GAUGE_OFF.repeat(GAUGE_CELLS - cells);
+};
+
 const gauge = (tps: number, theme: ThemeLike): string => {
-	const cells =
-		!Number.isFinite(tps) || tps <= 0
-			? 0
-			: Math.min(GAUGE_CELLS, Math.max(1, Math.round((tps / GAUGE_MAX_TPS) * GAUGE_CELLS)));
+	const cells = gaugeCells(tps);
 	return (
 		theme.fg("accent", RAMP.slice(0, cells)) +
 		theme.fg("dim", GAUGE_OFF.repeat(GAUGE_CELLS - cells))
 	);
 };
+
+const statusLine = (s: TurnStat, theme: ThemeLike): string =>
+	`${gauge(decodeTps(s), theme)} ${theme.fg("dim", fmt(s))}`;
+
+const flashLine = (s: TurnStat, theme: ThemeLike): string =>
+	theme.fg("warning", `${gaugeText(decodeTps(s))} ${fmt(s)}`);
 
 function computeStat({
 	model,
@@ -127,23 +126,20 @@ function computeStat({
 	turnStart,
 	firstTokenAt,
 	turnEnd,
-	thinkingChars,
-	visibleChars,
 }: {
 	model: string;
-	usage: { input?: number; cacheRead?: number; cacheWrite?: number; output?: number };
+	usage: {
+		input?: number;
+		cacheRead?: number;
+		cacheWrite?: number;
+		output?: number;
+		reasoning?: number;
+	};
 	turnStart: number;
 	firstTokenAt: number;
 	turnEnd: number;
-	thinkingChars: number;
-	visibleChars: number;
 }): TurnStat {
-	const output = usage.output ?? 0;
-	// Divide output tokens between the thinking and answer phases by the
-	// ratio of streamed characters. If no deltas occurred (for example
-	// non-streaming providers), use the raw count.
-	const streamed = thinkingChars + visibleChars;
-	const answerOutput = streamed > 0 ? Math.round(output * (visibleChars / streamed)) : output;
+	const answerOutput = Math.max(0, (usage.output ?? 0) - (usage.reasoning ?? 0));
 	return {
 		model,
 		input: usage.input ?? 0,
@@ -197,20 +193,11 @@ export default function (pi: ExtensionAPI) {
 	let recent = DEFAULT_RECENT;
 	const history: TurnStat[] = [];
 
-	// Live gauge state (current turn only).
-	let liveEnabled = true;
-	let liveTimer: ReturnType<typeof setInterval> | undefined;
-	let firstThinkingAt = 0;
-	let thinkingChars = 0;
-	let visibleChars = 0; // text + tool-call args, i.e. the answer phase
-	let liveTick = 0;
+	let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const reset = () => {
 		turnStart = 0;
 		firstTokenAt = 0;
-		firstThinkingAt = 0;
-		thinkingChars = 0;
-		visibleChars = 0;
 	};
 
 	const pushStat = (s: TurnStat) => {
@@ -218,100 +205,42 @@ export default function (pi: ExtensionAPI) {
 		if (history.length > HISTORY_CAP) history.splice(0, history.length - HISTORY_CAP);
 	};
 
-	const liveLine = (theme: ThemeLike): string => {
-		const now = performance.now();
-		const spin = theme.fg("accent", SPINNER[liveTick % SPINNER.length]);
-		if (!firstTokenAt && !firstThinkingAt) {
-			const empty = theme.fg("dim", GAUGE_OFF.repeat(GAUGE_CELLS));
-			return `${spin} ${empty} ${theme.fg("dim", `waiting… · ${secs(now - turnStart)}`)}`;
+	const stopFlash = () => {
+		if (flashTimer) {
+			clearTimeout(flashTimer);
+			flashTimer = undefined;
 		}
-		if (!firstTokenAt) {
-			// Thinking phase: thinking tokens are real decode work and their
-			// speed is visible, so the gauge stays on. The window starts at the
-			// first thinking delta, to keep prefill latency out of it.
-			const thinkSec = (now - firstThinkingAt) / 1000;
-			const tps = thinkSec > 0 ? thinkingChars / CHARS_PER_TOKEN / thinkSec : NaN;
-			const text = `~${r(tps)} tok/s · thinking · ${secs(now - turnStart)}`;
-			return `${spin} ${gauge(tps, theme)} ${theme.fg("dim", text)}`;
-		}
-		// Answer phase: cumulative visible-token speed for this turn so far.
-		// The window includes tool round-trips, to agree with the settled
-		// decode number. The gauge value decreases during tool calls and
-		// increases again when streaming continues.
-		const decodeSec = (now - firstTokenAt) / 1000;
-		const tps = decodeSec > 0 ? visibleChars / CHARS_PER_TOKEN / decodeSec : NaN;
-		const text =
-			`~${r(tps)} tok/s · ` +
-			`ttft ${(firstTokenAt - turnStart).toFixed(0)}ms · ` +
-			secs(now - turnStart);
-		return `${spin} ${gauge(tps, theme)} ${theme.fg("dim", text)}`;
-	};
-
-	const stopLive = () => {
-		if (liveTimer) {
-			clearInterval(liveTimer);
-			liveTimer = undefined;
-		}
-	};
-
-	const startLive = (ui: UiLike) => {
-		stopLive();
-		if (!liveEnabled) return;
-		ui.setStatus("speedometer", liveLine(ui.theme));
-		// setStatus triggers a footer repaint, so ticks stay visible even while
-		// a tool runs and no stream deltas arrive.
-		liveTimer = setInterval(() => {
-			liveTick++;
-			ui.setStatus("speedometer", liveLine(ui.theme));
-		}, LIVE_TICK_MS);
 	};
 
 	pi.on("session_start", async (_e, ctx) => {
 		history.length = 0;
-		stopLive();
+		stopFlash();
 		reset();
 		ctx.ui.setStatus("speedometer", undefined);
 	});
 
 	pi.on("session_shutdown", async (_e, ctx) => {
-		stopLive();
+		stopFlash();
 		ctx.ui.setStatus("speedometer", undefined);
 	});
 
-	pi.on("turn_start", async (_e, ctx) => {
+	pi.on("turn_start", async () => {
 		turnStart = performance.now();
 		firstTokenAt = 0;
-		firstThinkingAt = 0;
-		thinkingChars = 0;
-		visibleChars = 0;
-		startLive(ctx.ui);
 	});
 
 	pi.on("message_update", async (event) => {
 		const ev = event.assistantMessageEvent;
-		// Count thinking and visible characters separately. usage.output puts
-		// reasoning tokens in the total. The character ratio is thus
-		// necessary to divide the settled decode number correctly, and to let
-		// the live gauge show the speed of the correct phase.
-		if (ev.type === "thinking_delta") {
-			thinkingChars += ev.delta.length;
-			if (!firstThinkingAt) firstThinkingAt = performance.now();
-			return;
-		}
-		if (ev.type === "text_delta" || ev.type === "toolcall_delta") {
-			visibleChars += ev.delta.length;
-			// Latch on the first *user-visible* delta. Skip thinking deltas so
-			// TTFT reflects perceived latency on reasoning models.
-			if (!firstTokenAt) firstTokenAt = performance.now();
+		if (!firstTokenAt && (ev.type === "text_delta" || ev.type === "toolcall_delta")) {
+			// Skip thinking deltas so TTFT reflects perceived latency.
+			firstTokenAt = performance.now();
 		}
 	});
 
 	pi.on("turn_end", async (event, ctx) => {
 		const turnEnd = performance.now();
-		stopLive();
 		const msg = event.message;
 		if (!msg || msg.role !== "assistant" || !msg.usage || !firstTokenAt) {
-			ctx.ui.setStatus("speedometer", undefined);
 			reset();
 			return;
 		}
@@ -322,49 +251,27 @@ export default function (pi: ExtensionAPI) {
 			turnStart,
 			firstTokenAt,
 			turnEnd,
-			thinkingChars,
-			visibleChars,
 		});
 
 		pushStat(stat);
-		// Keep the gauge (snapped to real decode tok/s) alongside the settled
-		// numbers until the next turn_start replaces it.
-		ctx.ui.setStatus(
-			"speedometer",
-			`${gauge(decodeTps(stat), ctx.ui.theme)} ${ctx.ui.theme.fg("dim", fmt(stat))}`,
-		);
+		stopFlash();
+		ctx.ui.setStatus("speedometer", flashLine(stat, ctx.ui.theme));
+		flashTimer = setTimeout(() => {
+			ctx.ui.setStatus("speedometer", statusLine(stat, ctx.ui.theme));
+			flashTimer = undefined;
+		}, FLASH_MS);
 		reset();
 	});
 
 	pi.registerCommand("speed", {
 		description:
-			"Per-turn speed/timing metrics (ttft, prefill/decode tok/s). Keeps last 1000 turns. Subcommands: <n>, clear, csv, live on|off",
+			"Per-turn speed/timing metrics (ttft, prefill/decode tok/s). Keeps last 1000 turns. Subcommands: <n>, clear, csv",
 		handler: async (args, ctx) => {
 			const sub = (args ?? "").trim().toLowerCase();
 
-			if (sub === "live" || sub.startsWith("live ")) {
-				const arg = sub.slice("live".length).trim();
-				if (arg === "on") {
-					liveEnabled = true;
-					// Turn already in flight: pick it up immediately.
-					if (turnStart > 0 && !liveTimer) startLive(ctx.ui);
-					ctx.ui.notify("live gauge on", "info");
-				} else if (arg === "off") {
-					const wasRunning = liveTimer !== undefined;
-					liveEnabled = false;
-					stopLive();
-					if (wasRunning) ctx.ui.setStatus("speedometer", undefined);
-					ctx.ui.notify("live gauge off (this session)", "info");
-				} else if (arg === "") {
-					ctx.ui.notify(`live gauge is ${liveEnabled ? "on" : "off"} — /speed live on|off`, "info");
-				} else {
-					ctx.ui.notify(`Unknown argument: live ${arg}`, "warning");
-				}
-				return;
-			}
-
 			if (sub === "clear") {
 				history.length = 0;
+				stopFlash();
 				ctx.ui.setStatus("speedometer", undefined);
 				ctx.ui.notify("speed history cleared", "info");
 				return;
