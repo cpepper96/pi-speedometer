@@ -83,8 +83,8 @@ const prefillTps = (s: TurnStat) => {
 	return num / (s.ttftMs / 1000);
 };
 
-// The decode numerator has answer-phase tokens only. TTFT skips thinking
-// deltas on purpose, so the decode window starts after thinking.
+// Decode includes all output tokens and starts at the first output delta.
+// TTFT starts at the first visible delta, so it can include reasoning time.
 const decodeTps = (s: TurnStat) =>
 	s.decodeMs > 0 && s.output > 0 ? s.output / (s.decodeMs / 1000) : NaN;
 
@@ -124,7 +124,8 @@ function computeStat({
 	model,
 	usage,
 	turnStart,
-	firstTokenAt,
+	firstVisibleTokenAt,
+	firstOutputTokenAt,
 	turnEnd,
 }: {
 	model: string;
@@ -133,21 +134,20 @@ function computeStat({
 		cacheRead?: number;
 		cacheWrite?: number;
 		output?: number;
-		reasoning?: number;
 	};
 	turnStart: number;
-	firstTokenAt: number;
+	firstVisibleTokenAt: number;
+	firstOutputTokenAt: number;
 	turnEnd: number;
 }): TurnStat {
-	const answerOutput = Math.max(0, (usage.output ?? 0) - (usage.reasoning ?? 0));
 	return {
 		model,
 		input: usage.input ?? 0,
 		cacheRead: usage.cacheRead ?? 0,
 		cacheWrite: usage.cacheWrite ?? 0,
-		output: answerOutput,
-		ttftMs: firstTokenAt - turnStart,
-		decodeMs: turnEnd - firstTokenAt,
+		output: usage.output ?? 0,
+		ttftMs: firstVisibleTokenAt - turnStart,
+		decodeMs: turnEnd - firstOutputTokenAt,
 		totalMs: turnEnd - turnStart,
 	};
 }
@@ -189,7 +189,8 @@ function formatRecent(history: readonly TurnStat[], n: number): string[] {
 
 export default function (pi: ExtensionAPI) {
 	let turnStart = 0;
-	let firstTokenAt = 0;
+	let firstVisibleTokenAt = 0;
+	let firstOutputTokenAt = 0;
 	let recent = DEFAULT_RECENT;
 	const history: TurnStat[] = [];
 
@@ -197,7 +198,8 @@ export default function (pi: ExtensionAPI) {
 
 	const reset = () => {
 		turnStart = 0;
-		firstTokenAt = 0;
+		firstVisibleTokenAt = 0;
+		firstOutputTokenAt = 0;
 	};
 
 	const pushStat = (s: TurnStat) => {
@@ -226,21 +228,34 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("turn_start", async () => {
 		turnStart = performance.now();
-		firstTokenAt = 0;
+		firstVisibleTokenAt = 0;
+		firstOutputTokenAt = 0;
 	});
 
 	pi.on("message_update", async (event) => {
 		const ev = event.assistantMessageEvent;
-		if (!firstTokenAt && (ev.type === "text_delta" || ev.type === "toolcall_delta")) {
+		if (
+			!firstOutputTokenAt &&
+			(ev.type === "thinking_delta" || ev.type === "text_delta" || ev.type === "toolcall_delta")
+		) {
+			firstOutputTokenAt = performance.now();
+		}
+		if (!firstVisibleTokenAt && (ev.type === "text_delta" || ev.type === "toolcall_delta")) {
 			// Skip thinking deltas so TTFT reflects perceived latency.
-			firstTokenAt = performance.now();
+			firstVisibleTokenAt = performance.now();
 		}
 	});
 
 	pi.on("turn_end", async (event, ctx) => {
 		const turnEnd = performance.now();
 		const msg = event.message;
-		if (!msg || msg.role !== "assistant" || !msg.usage || !firstTokenAt) {
+		if (
+			!msg ||
+			msg.role !== "assistant" ||
+			!msg.usage ||
+			!firstVisibleTokenAt ||
+			!firstOutputTokenAt
+		) {
 			reset();
 			return;
 		}
@@ -249,7 +264,8 @@ export default function (pi: ExtensionAPI) {
 			model: ctx.model?.id ?? msg.model ?? "unknown",
 			usage: msg.usage,
 			turnStart,
-			firstTokenAt,
+			firstVisibleTokenAt,
+			firstOutputTokenAt,
 			turnEnd,
 		});
 

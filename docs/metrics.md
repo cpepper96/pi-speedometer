@@ -4,10 +4,10 @@
 
 - **TTFT** — the time from `turn_start` to the first `text_delta` or `toolcall_delta`. The extension uses `performance.now()`. Thinking deltas do not stop this timer. Thus, TTFT shows the latency that the user sees on reasoning models.
 - **Prefill tok/s** — `(input + cacheWrite) / ttft`. The calculation does not include `cacheRead`, because the provider did not process those tokens again. It includes `cacheWrite`, because the provider processed and wrote those tokens to the cache.
-- **Decode tok/s** — `answer_output / (turn_end - first_token)`. `answer_output` is `usage.output - (usage.reasoning ?? 0)`. The calculation does not include reported reasoning tokens, because the decode time starts at the first visible token. If the provider does not report reasoning usage, the calculation uses the raw `output` value.
+- **Decode tok/s** — `usage.output / (turn_end - first_output_token)`. This calculation includes reasoning tokens because they are model output. The decode timer starts at the first thinking, text, or tool-call delta. TTFT still starts at the first visible text or tool-call delta.
 - **Total** — the time from `turn_start` to `turn_end`. This time includes tool round-trips in the turn.
 
-The token counts come from `AssistantMessage.usage`. The timings come from pi events.
+The token counts come from `AssistantMessage.usage`. The timings come from pi events. Some providers do not stream reasoning deltas. For these providers, the first visible output starts the decode timer, so the reported rate can be too high when `usage.output` includes hidden reasoning tokens.
 
 ## Gauge
 
