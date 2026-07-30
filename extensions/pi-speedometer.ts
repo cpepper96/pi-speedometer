@@ -83,8 +83,10 @@ const prefillTps = (s: TurnStat) => {
 	return num / (s.ttftMs / 1000);
 };
 
-// Decode includes all output tokens and starts at the first output delta.
-// TTFT starts at the first visible delta, so it can include reasoning time.
+// Decode includes all output tokens. Its window runs from the first output
+// delta to the last output delta, so tool execution after the stream (which
+// happens before turn_end) is excluded.
+// TTFT ends at the first visible delta, so it can include reasoning time.
 const decodeTps = (s: TurnStat) =>
 	s.decodeMs > 0 && s.output > 0 ? s.output / (s.decodeMs / 1000) : NaN;
 
@@ -126,6 +128,7 @@ function computeStat({
 	turnStart,
 	firstVisibleTokenAt,
 	firstOutputTokenAt,
+	lastOutputTokenAt,
 	turnEnd,
 }: {
 	model: string;
@@ -138,6 +141,7 @@ function computeStat({
 	turnStart: number;
 	firstVisibleTokenAt: number;
 	firstOutputTokenAt: number;
+	lastOutputTokenAt: number;
 	turnEnd: number;
 }): TurnStat {
 	return {
@@ -147,7 +151,7 @@ function computeStat({
 		cacheWrite: usage.cacheWrite ?? 0,
 		output: usage.output ?? 0,
 		ttftMs: firstVisibleTokenAt - turnStart,
-		decodeMs: turnEnd - firstOutputTokenAt,
+		decodeMs: lastOutputTokenAt - firstOutputTokenAt,
 		totalMs: turnEnd - turnStart,
 	};
 }
@@ -191,6 +195,7 @@ export default function (pi: ExtensionAPI) {
 	let turnStart = 0;
 	let firstVisibleTokenAt = 0;
 	let firstOutputTokenAt = 0;
+	let lastOutputTokenAt = 0;
 	let recent = DEFAULT_RECENT;
 	const history: TurnStat[] = [];
 
@@ -200,6 +205,7 @@ export default function (pi: ExtensionAPI) {
 		turnStart = 0;
 		firstVisibleTokenAt = 0;
 		firstOutputTokenAt = 0;
+		lastOutputTokenAt = 0;
 	};
 
 	const pushStat = (s: TurnStat) => {
@@ -230,19 +236,20 @@ export default function (pi: ExtensionAPI) {
 		turnStart = performance.now();
 		firstVisibleTokenAt = 0;
 		firstOutputTokenAt = 0;
+		lastOutputTokenAt = 0;
 	});
 
 	pi.on("message_update", async (event) => {
 		const ev = event.assistantMessageEvent;
-		if (
-			!firstOutputTokenAt &&
-			(ev.type === "thinking_delta" || ev.type === "text_delta" || ev.type === "toolcall_delta")
-		) {
-			firstOutputTokenAt = performance.now();
+		if (ev.type !== "thinking_delta" && ev.type !== "text_delta" && ev.type !== "toolcall_delta") {
+			return;
 		}
-		if (!firstVisibleTokenAt && (ev.type === "text_delta" || ev.type === "toolcall_delta")) {
+		const now = performance.now();
+		if (!firstOutputTokenAt) firstOutputTokenAt = now;
+		lastOutputTokenAt = now;
+		if (!firstVisibleTokenAt && ev.type !== "thinking_delta") {
 			// Skip thinking deltas so TTFT reflects perceived latency.
-			firstVisibleTokenAt = performance.now();
+			firstVisibleTokenAt = now;
 		}
 	});
 
@@ -266,6 +273,7 @@ export default function (pi: ExtensionAPI) {
 			turnStart,
 			firstVisibleTokenAt,
 			firstOutputTokenAt,
+			lastOutputTokenAt,
 			turnEnd,
 		});
 
