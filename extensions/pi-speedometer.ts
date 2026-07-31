@@ -39,6 +39,7 @@ interface TurnStat {
 	output: number;
 	// Timings (monotonic ms from performance.now()).
 	ttftMs: number;
+	prefillMs: number;
 	decodeMs: number;
 	totalMs: number;
 }
@@ -49,6 +50,7 @@ interface Aggregate {
 	cacheWrite: number; // sum
 	output: number;     // sum
 	ttftMs: number;     // sum
+	prefillMs: number;  // sum
 	decodeMs: number;   // sum
 	totalMs: number;    // sum
 }
@@ -72,15 +74,18 @@ const r = (n: number, d = 0) => (Number.isFinite(n) ? n.toFixed(d) : "—");
 // Wall-clock seconds with 1 decimal.
 const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
-// Prefill numerator: tokens that actually had to be processed during TTFT.
+// Prefill numerator: tokens that actually had to be processed before output.
 // pi-ai already subtracts cacheRead+cacheWrite from `input`, so we add
 // cacheWrite back (it's still real work this turn) but not cacheRead.
 const prefillNumerator = (s: TurnStat) => s.input + s.cacheWrite;
 
+// Prefill window ends at the first output delta of any kind (thinking
+// included), not at TTFT — on reasoning models TTFT also spans thinking time,
+// which is decode work, not prompt processing.
 const prefillTps = (s: TurnStat) => {
 	const num = prefillNumerator(s);
-	if (num <= 0 || s.ttftMs <= 0) return NaN;
-	return num / (s.ttftMs / 1000);
+	if (num <= 0 || s.prefillMs <= 0) return NaN;
+	return num / (s.prefillMs / 1000);
 };
 
 // Decode includes all output tokens. Its window runs from the first output
@@ -151,6 +156,7 @@ function computeStat({
 		cacheWrite: usage.cacheWrite ?? 0,
 		output: usage.output ?? 0,
 		ttftMs: firstVisibleTokenAt - turnStart,
+		prefillMs: firstOutputTokenAt - turnStart,
 		decodeMs: lastOutputTokenAt - firstOutputTokenAt,
 		totalMs: turnEnd - turnStart,
 	};
@@ -166,6 +172,7 @@ function aggregateByModel(history: readonly TurnStat[]): Map<string, Aggregate> 
 			cacheWrite: 0,
 			output: 0,
 			ttftMs: 0,
+			prefillMs: 0,
 			decodeMs: 0,
 			totalMs: 0,
 		};
@@ -175,6 +182,7 @@ function aggregateByModel(history: readonly TurnStat[]): Map<string, Aggregate> 
 		a.cacheWrite += turn.cacheWrite;
 		a.output += turn.output;
 		a.ttftMs += turn.ttftMs;
+		a.prefillMs += turn.prefillMs;
 		a.decodeMs += turn.decodeMs;
 		a.totalMs += turn.totalMs;
 
@@ -260,6 +268,10 @@ export default function (pi: ExtensionAPI) {
 			!msg ||
 			msg.role !== "assistant" ||
 			!msg.usage ||
+			// Aborted/errored turns have partial usage and timings; keep the
+			// previous status line instead of recording a misleading stat.
+			msg.stopReason === "aborted" ||
+			msg.stopReason === "error" ||
 			!firstVisibleTokenAt ||
 			!firstOutputTokenAt
 		) {
@@ -307,7 +319,7 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const header =
-					"model,input,cacheRead,cacheWrite,output,ttftMs,decodeMs,totalMs,prefillTps,decodeTps";
+					"model,input,cacheRead,cacheWrite,output,ttftMs,prefillMs,decodeMs,totalMs,prefillTps,decodeTps";
 				const rows = history.map((s) =>
 					[
 						JSON.stringify(s.model),
@@ -316,6 +328,7 @@ export default function (pi: ExtensionAPI) {
 						s.cacheWrite,
 						s.output,
 						s.ttftMs.toFixed(1),
+						s.prefillMs.toFixed(1),
 						s.decodeMs.toFixed(1),
 						s.totalMs.toFixed(1),
 						r(prefillTps(s), 2),
@@ -355,7 +368,8 @@ export default function (pi: ExtensionAPI) {
 			lines.push("Session averages:");
 			for (const [model, a] of byModel) {
 				const prefillNum = a.input + a.cacheWrite;
-				const avgPrefill = prefillNum > 0 && a.ttftMs > 0 ? prefillNum / (a.ttftMs / 1000) : NaN;
+				const avgPrefill =
+					prefillNum > 0 && a.prefillMs > 0 ? prefillNum / (a.prefillMs / 1000) : NaN;
 				const avgDecode = a.output > 0 && a.decodeMs > 0 ? a.output / (a.decodeMs / 1000) : NaN;
 				lines.push(
 					`  [${model}] ${a.n} turns  ` +

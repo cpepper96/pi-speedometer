@@ -3,11 +3,11 @@
 ## Measurements
 
 - **TTFT** — the time from `turn_start` to the first `text_delta` or `toolcall_delta`. The extension uses `performance.now()`. Thinking deltas do not stop this timer. Thus, TTFT shows the latency that the user sees on reasoning models.
-- **Prefill tok/s** — `(input + cacheWrite) / ttft`. The calculation does not include `cacheRead`, because the provider did not process those tokens again. It includes `cacheWrite`, because the provider processed and wrote those tokens to the cache.
+- **Prefill tok/s** — `(input + cacheWrite) / prefill_time`. Prefill time runs from `turn_start` to the first output delta of any kind, thinking included. It is not TTFT, because TTFT also spans thinking time on reasoning models. The calculation does not include `cacheRead`, because the provider did not process those tokens again. It includes `cacheWrite`, because the provider processed and wrote those tokens to the cache.
 - **Decode tok/s** — `usage.output / (last_output_delta - first_output_delta)`. This calculation includes reasoning tokens because they are model output. The decode timer starts at the first thinking, text, or tool-call delta. It stops at the last delta. Thus, tool execution time in the turn does not change the decode rate. TTFT still ends at the first visible text or tool-call delta.
 - **Total** — the time from `turn_start` to `turn_end`. This time includes tool round-trips in the turn.
 
-The token counts come from `AssistantMessage.usage`. The timings come from pi events. Some providers do not stream reasoning deltas. For these providers, the first visible output starts the decode timer, so the reported rate can be too high when `usage.output` includes hidden reasoning tokens.
+The token counts come from `AssistantMessage.usage`. The timings come from pi events. Some providers do not stream reasoning deltas. For these providers, the first visible delta starts the decode timer and ends the prefill window. Hidden reasoning tokens then make the decode rate read too high and the prefill rate read too low.
 
 ## Gauge
 
