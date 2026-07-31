@@ -131,7 +131,7 @@ const statusLine = (s: TurnStat, theme: ThemeLike): string =>
 	`${gauge(decodeTps(s), theme)} ${theme.fg("dim", fmt(s))}`;
 
 const flashLine = (s: TurnStat, theme: ThemeLike): string =>
-	theme.fg("warning", `${gaugeText(decodeTps(s))} ${fmt(s)}`);
+	theme.fg("accent", `${gaugeText(decodeTps(s))} ${fmt(s)}`);
 
 function computeStat({
 	model,
