@@ -11,7 +11,7 @@ The token counts come from `AssistantMessage.usage`. The timings come from pi ev
 
 ## Gauge
 
-The gauge uses the completed turn's decode tok/s value. It has eight cells and a linear scale from 0 to 400 tok/s. Each cell represents 50 tok/s. Values at 400 tok/s or more fill the gauge.
+The gauge uses the completed turn's decode tok/s value. It has twelve cells and a linear scale from 0 to 300 tok/s. Each cell represents 25 tok/s. Values at 300 tok/s or more fill the gauge. A speed above zero lights at least one cell.
 
 The extension does not estimate speed while a turn runs. The last valid status line stays unchanged until the next valid turn ends. An aborted or invalid turn does not replace it.
 

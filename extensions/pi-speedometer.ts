@@ -9,7 +9,7 @@
  *
  * Status line (most recent turn) — the gauge uses the final decode tok/s
  * from real usage and stays unchanged until the next valid turn ends:
- *   ▁▂······ ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
+ *   ▁▁·········· ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
  *
  * When new data arrives, the complete line uses the theme warning color for
  * 500 ms. It then returns to its normal gauge and text colors.
@@ -59,9 +59,14 @@ const DEFAULT_RECENT = 10;
 const HISTORY_CAP = 1000;
 
 const FLASH_MS = 500;
-const GAUGE_CELLS = 8;
-const GAUGE_MAX_TPS = 400; // linear full scale; 50 tok/s per cell
+const GAUGE_CELLS = 12;
+const GAUGE_MAX_TPS = 300; // linear full scale; 25 tok/s per cell
 const RAMP = "▁▂▃▄▅▆▇█";
+// The 8 ramp glyphs stretched across the gauge width, one glyph per cell.
+const GAUGE_RAMP = Array.from(
+	{ length: GAUGE_CELLS },
+	(_, i) => RAMP[Math.floor((i * RAMP.length) / GAUGE_CELLS)],
+).join("");
 const GAUGE_OFF = "·";
 
 // Minimal structural slice of pi's theme type, so helpers stay decoupled from
@@ -101,22 +106,23 @@ const fmt = (s: TurnStat) =>
 	`decode ${r(decodeTps(s), 1)} tok/s  ` +
 	`total ${secs(s.totalMs)}`;
 
-// Ramp gauge: fill level = tps on a linear 0..GAUGE_MAX_TPS scale.
+// Ramp gauge: fill level = tps on a linear 0..GAUGE_MAX_TPS scale, floored so
+// each cell represents exactly GAUGE_MAX_TPS/GAUGE_CELLS tok/s.
 // Any nonzero speed lights at least one cell; unlit cells stay visible as dim dots.
 const gaugeCells = (tps: number) =>
 	!Number.isFinite(tps) || tps <= 0
 		? 0
-		: Math.min(GAUGE_CELLS, Math.max(1, Math.round((tps / GAUGE_MAX_TPS) * GAUGE_CELLS)));
+		: Math.min(GAUGE_CELLS, Math.max(1, Math.floor((tps / GAUGE_MAX_TPS) * GAUGE_CELLS)));
 
 const gaugeText = (tps: number): string => {
 	const cells = gaugeCells(tps);
-	return RAMP.slice(0, cells) + GAUGE_OFF.repeat(GAUGE_CELLS - cells);
+	return GAUGE_RAMP.slice(0, cells) + GAUGE_OFF.repeat(GAUGE_CELLS - cells);
 };
 
 const gauge = (tps: number, theme: ThemeLike): string => {
 	const cells = gaugeCells(tps);
 	return (
-		theme.fg("accent", RAMP.slice(0, cells)) +
+		theme.fg("accent", GAUGE_RAMP.slice(0, cells)) +
 		theme.fg("dim", GAUGE_OFF.repeat(GAUGE_CELLS - cells))
 	);
 };

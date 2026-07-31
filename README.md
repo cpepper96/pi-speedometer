@@ -9,7 +9,7 @@ A per-turn speedometer for [pi](https://pi.dev). It adds these model performance
 - a gauge for decode speed
 
 ```txt
-▁▂······ ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
+▁▁·········· ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
 ```
 
 The status updates after each completed model turn. It briefly changes color when new data arrives, then stays visible until the next update.
