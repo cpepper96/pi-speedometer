@@ -1,22 +1,24 @@
 # pi-speedometer
 
-A per-turn speedometer for [pi](https://pi.dev): TTFT (time to first token), prefill tok/s, decode tok/s, and total wall time.
+A per-turn speedometer for [pi](https://pi.dev). It adds these model performance metrics to pi's status line:
 
-Pi's built-in footer already shows tokens, cache, cost, context, and model. This extension surfaces the *timing* numbers it doesn't show.
-
-## Status line
-
-After each turn, pi's status area shows:
+- time to first token (TTFT)
+- prefill tokens per second
+- decode tokens per second
+- total turn time
+- a gauge for decode speed
 
 ```txt
-ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
+▁▁·········· ttft 1967ms  prefill 412 tok/s  decode 63.8 tok/s  total 14.2s
 ```
+
+The status updates after each completed model turn. It briefly changes color when new data arrives, then stays visible until the next update.
 
 ## Commands
 
 - `/speed` — show recent turns and per-model session averages
 - `/speed clear` — reset history
-- `/speed csv` — dump full history to `~/.pi/pi-speedometer-<timestamp>.csv`
+- `/speed csv` — export history as CSV
 
 ## Install
 
@@ -30,14 +32,7 @@ Or try it without installing:
 pi -e npm:pi-speedometer
 ```
 
-## How it's measured
-
-- **TTFT** — `performance.now()` from `turn_start` to the first `text_delta` or `toolcall_delta` (thinking deltas are skipped so TTFT reflects perceived latency on reasoning models).
-- **Prefill tok/s** — `(input + cacheWrite) / ttft`. `cacheRead` is excluded because those tokens didn't require real prefill work this turn. `cacheWrite` is included because those tokens were processed *and* persisted to cache.
-- **Decode tok/s** — `output / (turn_end - first_token)`.
-- **Total** — wall-clock from `turn_start` to `turn_end`, including any tool round-trips inside the turn.
-
-Numbers come from `AssistantMessage.usage` (provider-agnostic) plus pi's own event timings, so any provider pi supports will report.
+For calculation details and status behavior, see [Metrics and status behavior](docs/metrics.md).
 
 ## Development
 
