@@ -1,6 +1,6 @@
 {
   "name": "pi-speedometer",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Per-turn speedometer for pi: TTFT, prefill tok/s, decode tok/s, and total wall time.",
   "type": "module",
   "keywords": [
